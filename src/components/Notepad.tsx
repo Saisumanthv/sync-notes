@@ -1,82 +1,166 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { FileText, Wifi, WifiOff } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
+import { FileText, Plus, Trash2, Wifi, WifiOff, LogOut } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
-const NOTE_ID = "default";
+interface Note {
+  id: string;
+  title: string;
+  content: string;
+  updated_at: string;
+}
 
 const Notepad = () => {
+  const { user, signOut } = useAuth();
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [content, setContent] = useState("");
+  const [title, setTitle] = useState("");
   const [status, setStatus] = useState<"saved" | "saving" | "synced" | "offline">("synced");
   const [charCount, setCharCount] = useState(0);
   const isLocalChange = useRef(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const titleDebounceRef = useRef<ReturnType<typeof setTimeout>>();
 
-  // Load initial content
+  // Load notes list
   useEffect(() => {
+    if (!user) return;
     const load = async () => {
       const { data } = await supabase
         .from("notes")
-        .select("content")
-        .eq("id", NOTE_ID)
-        .single();
-      if (data) {
-        setContent(data.content);
-        setCharCount(data.content.length);
+        .select("id, title, content, updated_at")
+        .eq("user_id", user.id)
+        .order("updated_at", { ascending: false });
+      if (data && data.length > 0) {
+        setNotes(data);
+        setActiveId(data[0].id);
+        setContent(data[0].content);
+        setTitle(data[0].title);
+        setCharCount(data[0].content.length);
       }
     };
     load();
-  }, []);
+  }, [user]);
 
-  // Subscribe to realtime changes
+  // Realtime subscription
   useEffect(() => {
+    if (!user) return;
     const channel = supabase
       .channel("notes-realtime")
       .on(
         "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "notes", filter: `id=eq.${NOTE_ID}` },
+        { event: "*", schema: "public", table: "notes" },
         (payload) => {
-          if (!isLocalChange.current) {
-            const newContent = (payload.new as { content: string }).content;
-            setContent(newContent);
-            setCharCount(newContent.length);
-            setStatus("synced");
+          if (isLocalChange.current) {
+            isLocalChange.current = false;
+            return;
           }
-          isLocalChange.current = false;
+          const newRecord = payload.new as Note & { user_id: string };
+          if (newRecord?.user_id !== undefined && newRecord.user_id !== user.id) return;
+
+          if (payload.eventType === "INSERT") {
+            setNotes((prev) => [newRecord, ...prev]);
+          } else if (payload.eventType === "UPDATE") {
+            setNotes((prev) => prev.map((n) => (n.id === newRecord.id ? { ...n, ...newRecord } : n)));
+            if (newRecord.id === activeId) {
+              setContent(newRecord.content);
+              setTitle(newRecord.title);
+              setCharCount(newRecord.content.length);
+            }
+          } else if (payload.eventType === "DELETE") {
+            const oldId = (payload.old as { id: string }).id;
+            setNotes((prev) => prev.filter((n) => n.id !== oldId));
+            if (oldId === activeId) {
+              setActiveId(null);
+              setContent("");
+              setTitle("");
+              setCharCount(0);
+            }
+          }
+          setStatus("synced");
         }
       )
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") setStatus("synced");
-        if (status === "CLOSED" || status === "CHANNEL_ERROR") setStatus("offline");
+      .subscribe((s) => {
+        if (s === "SUBSCRIBED") setStatus("synced");
+        if (s === "CLOSED" || s === "CHANNEL_ERROR") setStatus("offline");
       });
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
+    return () => { supabase.removeChannel(channel); };
+  }, [user, activeId]);
 
-  const saveContent = useCallback(async (text: string) => {
+  const saveContent = useCallback(async (noteId: string, text: string) => {
     setStatus("saving");
     isLocalChange.current = true;
     const { error } = await supabase
       .from("notes")
       .update({ content: text, updated_at: new Date().toISOString() })
-      .eq("id", NOTE_ID);
-    
-    if (error) {
-      setStatus("offline");
-    } else {
-      setStatus("saved");
-      setTimeout(() => setStatus("synced"), 1500);
-    }
+      .eq("id", noteId);
+    if (error) setStatus("offline");
+    else { setStatus("saved"); setTimeout(() => setStatus("synced"), 1500); }
   }, []);
 
-  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  const saveTitle = useCallback(async (noteId: string, newTitle: string) => {
+    isLocalChange.current = true;
+    await supabase.from("notes").update({ title: newTitle }).eq("id", noteId);
+    setNotes((prev) => prev.map((n) => (n.id === noteId ? { ...n, title: newTitle } : n)));
+  }, []);
+
+  const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const text = e.target.value;
     setContent(text);
     setCharCount(text.length);
-
+    setNotes((prev) => prev.map((n) => (n.id === activeId ? { ...n, content: text } : n)));
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => saveContent(text), 300);
+    if (activeId) debounceRef.current = setTimeout(() => saveContent(activeId, text), 300);
+  };
+
+  const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newTitle = e.target.value;
+    setTitle(newTitle);
+    if (titleDebounceRef.current) clearTimeout(titleDebounceRef.current);
+    if (activeId) titleDebounceRef.current = setTimeout(() => saveTitle(activeId, newTitle), 500);
+  };
+
+  const createNote = async () => {
+    if (!user) return;
+    isLocalChange.current = true;
+    const { data } = await supabase
+      .from("notes")
+      .insert({ user_id: user.id, title: "Untitled", content: "" })
+      .select()
+      .single();
+    if (data) {
+      setNotes((prev) => [data, ...prev]);
+      setActiveId(data.id);
+      setContent("");
+      setTitle("Untitled");
+      setCharCount(0);
+    }
+  };
+
+  const deleteNote = async (noteId: string) => {
+    isLocalChange.current = true;
+    await supabase.from("notes").delete().eq("id", noteId);
+    setNotes((prev) => prev.filter((n) => n.id !== noteId));
+    if (noteId === activeId) {
+      const remaining = notes.filter((n) => n.id !== noteId);
+      if (remaining.length > 0) {
+        selectNote(remaining[0]);
+      } else {
+        setActiveId(null);
+        setContent("");
+        setTitle("");
+        setCharCount(0);
+      }
+    }
+  };
+
+  const selectNote = (note: Note) => {
+    setActiveId(note.id);
+    setContent(note.content);
+    setTitle(note.title);
+    setCharCount(note.content.length);
   };
 
   const statusConfig = {
@@ -85,59 +169,110 @@ const Notepad = () => {
     synced: { text: "Live", color: "bg-green-500" },
     offline: { text: "Offline", color: "bg-destructive" },
   };
-
   const { text: statusText, color: dotColor } = statusConfig[status];
 
   return (
-    <div className="min-h-screen flex flex-col">
-      {/* Header */}
-      <header className="sticky top-0 z-10 backdrop-blur-md bg-background/80 border-b px-4 sm:px-8 py-4">
-        <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <FileText className="w-5 h-5 text-primary" />
-            <h1 className="text-lg font-semibold font-sans tracking-tight text-foreground">
-              Shared Notepad
-            </h1>
+    <div className="min-h-screen flex">
+      {/* Sidebar */}
+      <aside className="w-64 border-r bg-card flex flex-col shrink-0">
+        <div className="p-4 border-b flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FileText className="w-4 h-4 text-primary" />
+            <span className="font-semibold text-sm text-foreground">Notes</span>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="save-indicator text-muted-foreground flex items-center gap-2">
-              <span className={`pulse-dot ${dotColor}`} />
-              {statusText}
-            </span>
-            {status === "offline" ? (
-              <WifiOff className="w-4 h-4 text-destructive" />
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={createNote}>
+            <Plus className="w-4 h-4" />
+          </Button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {notes.map((note) => (
+            <div
+              key={note.id}
+              onClick={() => selectNote(note)}
+              className={`flex items-center justify-between px-4 py-3 cursor-pointer border-b border-border transition-colors group ${
+                note.id === activeId ? "bg-accent" : "hover:bg-muted"
+              }`}
+            >
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium truncate text-foreground">{note.title}</p>
+                <p className="text-xs text-muted-foreground truncate">{note.content.slice(0, 40) || "Empty"}</p>
+              </div>
+              <button
+                onClick={(e) => { e.stopPropagation(); deleteNote(note.id); }}
+                className="opacity-0 group-hover:opacity-100 transition-opacity ml-2 p-1 hover:text-destructive text-muted-foreground"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+          {notes.length === 0 && (
+            <div className="p-4 text-center text-sm text-muted-foreground">
+              No notes yet. Click + to create one.
+            </div>
+          )}
+        </div>
+        <div className="p-3 border-t">
+          <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground" onClick={signOut}>
+            <LogOut className="w-3.5 h-3.5 mr-2" />
+            Sign Out
+          </Button>
+        </div>
+      </aside>
+
+      {/* Main editor */}
+      <div className="flex-1 flex flex-col min-w-0">
+        <header className="sticky top-0 z-10 backdrop-blur-md bg-background/80 border-b px-6 py-3">
+          <div className="flex items-center justify-between">
+            {activeId ? (
+              <input
+                value={title}
+                onChange={handleTitleChange}
+                className="text-lg font-semibold bg-transparent border-none outline-none text-foreground w-full font-sans"
+                placeholder="Note title…"
+              />
             ) : (
-              <Wifi className="w-4 h-4 text-muted-foreground" />
+              <span className="text-lg font-semibold text-muted-foreground">Select or create a note</span>
             )}
+            <div className="flex items-center gap-3 shrink-0 ml-4">
+              <span className="save-indicator text-muted-foreground flex items-center gap-2">
+                <span className={`pulse-dot ${dotColor}`} />
+                {statusText}
+              </span>
+              {status === "offline" ? (
+                <WifiOff className="w-4 h-4 text-destructive" />
+              ) : (
+                <Wifi className="w-4 h-4 text-muted-foreground" />
+              )}
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
 
-      {/* Editor */}
-      <main className="flex-1 px-4 sm:px-8 py-8">
-        <div className="max-w-3xl mx-auto">
-          <textarea
-            className="notepad-textarea"
-            value={content}
-            onChange={handleChange}
-            placeholder="Start typing… your notes sync instantly across all devices."
-            spellCheck={false}
-            autoFocus
-          />
-        </div>
-      </main>
+        <main className="flex-1 px-6 py-6">
+          {activeId ? (
+            <textarea
+              className="notepad-textarea"
+              value={content}
+              onChange={handleContentChange}
+              placeholder="Start typing… your notes sync instantly across all devices."
+              spellCheck={false}
+              autoFocus
+            />
+          ) : (
+            <div className="flex items-center justify-center h-full text-muted-foreground">
+              <p>Select a note or create a new one to get started.</p>
+            </div>
+          )}
+        </main>
 
-      {/* Footer */}
-      <footer className="sticky bottom-0 backdrop-blur-md bg-background/80 border-t px-4 sm:px-8 py-3">
-        <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <span className="text-xs text-muted-foreground font-mono">
-            {charCount} characters
-          </span>
-          <span className="text-xs text-muted-foreground font-sans">
-            Open this page on another device to sync
-          </span>
-        </div>
-      </footer>
+        <footer className="sticky bottom-0 backdrop-blur-md bg-background/80 border-t px-6 py-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground font-mono">{charCount} characters</span>
+            <span className="text-xs text-muted-foreground font-sans">
+              Open on another device to sync
+            </span>
+          </div>
+        </footer>
+      </div>
     </div>
   );
 };
