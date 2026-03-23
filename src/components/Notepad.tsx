@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { FileText, Plus, Trash2, Wifi, WifiOff, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import ThemeToggle from "@/components/ThemeToggle";
 
 interface Note {
   id: string;
@@ -243,6 +244,7 @@ const Notepad = () => {
               ) : (
                 <Wifi className="w-4 h-4 text-muted-foreground" />
               )}
+              <ThemeToggle />
             </div>
           </div>
         </header>
