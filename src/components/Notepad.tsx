@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { FileText, Plus, Trash2, Wifi, WifiOff, LogOut } from "lucide-react";
+import { FileText, Plus, Trash2, Wifi, WifiOff, LogOut, Menu, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import ThemeToggle from "@/components/ThemeToggle";
 
@@ -20,6 +20,7 @@ const Notepad = () => {
   const [title, setTitle] = useState("");
   const [status, setStatus] = useState<"saved" | "saving" | "synced" | "offline">("synced");
   const [charCount, setCharCount] = useState(0);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const isLocalChange = useRef(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const titleDebounceRef = useRef<ReturnType<typeof setTimeout>>();
@@ -162,6 +163,7 @@ const Notepad = () => {
     setContent(note.content);
     setTitle(note.title);
     setCharCount(note.content.length);
+    setSidebarOpen(false); // close sidebar on mobile after selecting
   };
 
   const statusConfig = {
@@ -173,17 +175,42 @@ const Notepad = () => {
   const { text: statusText, color: dotColor } = statusConfig[status];
 
   return (
-    <div className="min-h-screen flex">
+    <div className="min-h-screen flex relative">
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-foreground/20 backdrop-blur-sm z-30 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <aside className="w-64 border-r bg-card flex flex-col shrink-0">
+      <aside
+        className={`
+          fixed inset-y-0 left-0 z-40 w-64 border-r bg-card flex flex-col shrink-0
+          transition-transform duration-200 ease-in-out
+          md:relative md:translate-x-0
+          ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
+        `}
+      >
         <div className="p-4 border-b flex items-center justify-between">
           <div className="flex items-center gap-2">
             <FileText className="w-4 h-4 text-primary" />
             <span className="font-semibold text-sm text-foreground">Notes</span>
           </div>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={createNote}>
-            <Plus className="w-4 h-4" />
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={createNote}>
+              <Plus className="w-4 h-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 md:hidden"
+              onClick={() => setSidebarOpen(false)}
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto">
           {notes.map((note) => (
@@ -222,34 +249,44 @@ const Notepad = () => {
 
       {/* Main editor */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="sticky top-0 z-10 backdrop-blur-md bg-background/80 border-b px-6 py-3">
-          <div className="flex items-center justify-between">
-            {activeId ? (
-              <input
-                value={title}
-                onChange={handleTitleChange}
-                className="text-lg font-semibold bg-transparent border-none outline-none text-foreground w-full font-sans"
-                placeholder="Note title…"
-              />
-            ) : (
-              <span className="text-lg font-semibold text-muted-foreground">Select or create a note</span>
-            )}
-            <div className="flex items-center gap-3 shrink-0 ml-4">
+        <header className="sticky top-0 z-10 backdrop-blur-md bg-background/80 border-b px-4 md:px-6 py-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0 md:hidden"
+                onClick={() => setSidebarOpen(true)}
+              >
+                <Menu className="w-4 h-4" />
+              </Button>
+              {activeId ? (
+                <input
+                  value={title}
+                  onChange={handleTitleChange}
+                  className="text-lg font-semibold bg-transparent border-none outline-none text-foreground w-full font-sans"
+                  placeholder="Note title…"
+                />
+              ) : (
+                <span className="text-lg font-semibold text-muted-foreground truncate">Select or create a note</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 md:gap-3 shrink-0">
               <span className="save-indicator text-muted-foreground flex items-center gap-2">
                 <span className={`pulse-dot ${dotColor}`} />
-                {statusText}
+                <span className="hidden sm:inline">{statusText}</span>
               </span>
               {status === "offline" ? (
                 <WifiOff className="w-4 h-4 text-destructive" />
               ) : (
-                <Wifi className="w-4 h-4 text-muted-foreground" />
+                <Wifi className="w-4 h-4 text-muted-foreground hidden sm:block" />
               )}
               <ThemeToggle />
             </div>
           </div>
         </header>
 
-        <main className="flex-1 px-6 py-6">
+        <main className="flex-1 px-4 md:px-6 py-4 md:py-6">
           {activeId ? (
             <textarea
               className="notepad-textarea"
@@ -266,10 +303,10 @@ const Notepad = () => {
           )}
         </main>
 
-        <footer className="sticky bottom-0 backdrop-blur-md bg-background/80 border-t px-6 py-3">
+        <footer className="sticky bottom-0 backdrop-blur-md bg-background/80 border-t px-4 md:px-6 py-3">
           <div className="flex items-center justify-between">
             <span className="text-xs text-muted-foreground font-mono">{charCount} characters</span>
-            <span className="text-xs text-muted-foreground font-sans">
+            <span className="text-xs text-muted-foreground font-sans hidden sm:block">
               Open on another device to sync
             </span>
           </div>
