@@ -244,6 +244,7 @@ const Notepad = () => {
               ) : (
                 <Wifi className="w-4 h-4 text-muted-foreground" />
               )}
+              <ThemeToggle />
             </div>
           </div>
         </header>
